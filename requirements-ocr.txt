@@ -1,0 +1,10 @@
+# requirements-ocr.txt - OCR 可选依赖（仅本地开发安装）
+# Streamlit Cloud 免费版不支持，请勿部署
+# 本地安装: pip install -r requirements-ocr.txt
+
+paddlepaddle==2.6.2
+paddleocr==2.8.1
+numpy<2.0
+opencv-python<4.10
+scikit-image
+shapely

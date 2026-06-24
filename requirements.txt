@@ -1,4 +1,5 @@
-# requirements.txt - KnowNote 智能笔记助手 依赖清单
+# requirements.txt - KnowNote 智能笔记助手 核心依赖
+# 用于 Streamlit Cloud 部署（轻量，不含 OCR）
 
 # Web 框架
 streamlit>=1.30.0
@@ -11,18 +12,6 @@ networkx>=3.1
 
 # 数据处理
 pandas>=2.0.0
-
-# OCR 文字识别（可选，用于图片上传）
-# 注意：PaddleOCR 3.x 与 PaddlePaddle 3.x 在 Windows 上有 oneDNN 兼容性 bug
-# 请使用 2.x 版本：
-#   pip install paddlepaddle==2.6.2 paddleocr==2.8.1
-#   pip install scikit-image shapely beautifulsoup4 fire imgaug opencv-python
-paddlepaddle==2.6.2
-paddleocr==2.8.1
-numpy<2.0
-opencv-python<4.10
-scikit-image
-shapely
 
 # HTTP 请求（LLM API 调用）
 requests>=2.31.0

@@ -2,8 +2,16 @@
 import streamlit as st
 from modules.nlp_processor import NLPProcessor
 from modules.graph_builder import KnowledgeGraphBuilder
-from modules.ocr_processor import OCRProcessor
 from modules.llm_processor import LLMProcessor
+from modules.mindmap_builder import MindMapBuilder
+
+# OCR 为可选依赖（PaddleOCR 约 500MB，Streamlit Cloud 免费版不支持）
+_OCR_AVAILABLE = False
+try:
+    from modules.ocr_processor import OCRProcessor
+    _OCR_AVAILABLE = True
+except ImportError:
+    pass
 
 # ============================================================
 # 页面配置 — 必须是第一个 Streamlit 命令
@@ -35,6 +43,10 @@ if "saved_api_key" not in st.session_state:
     st.session_state.saved_api_key = ""
 if "saved_api_type" not in st.session_state:
     st.session_state.saved_api_type = "deepseek"
+if "mindmap_html" not in st.session_state:
+    st.session_state.mindmap_html = None
+if "view_mode" not in st.session_state:
+    st.session_state.view_mode = "🗺️ 知识图谱"
 
 
 # ============================================================
@@ -73,21 +85,39 @@ def process_notes(text, topk_keywords, edge_threshold, enable_llm, api_key, api_
         st.session_state.has_result = True
         st.session_state.keyword_info = None  # 重置关键词查询结果
 
-        # 4. 可选：AI 摘要
+        # 3.5 生成思维导图（NLP 模式，始终生成，速度快无成本）
+        builder_mm = MindMapBuilder()
+        nlp_mindmap_md = builder_mm.build_markdown_from_graph(
+            builder.graph, keywords
+        )
+        st.session_state.mindmap_html = builder_mm.generate_markmap_html(nlp_mindmap_md)
+
+        # 4. 可选：AI 增强（摘要 + 思维导图）
         if enable_llm:
             if not api_key:
-                st.warning("请在侧边栏输入 API Key 以启用 AI 摘要")
+                st.warning("请在侧边栏输入 API Key 以启用 AI 增强")
             else:
-                with st.spinner("正在生成 AI 摘要..."):
+                with st.spinner("正在生成 AI 摘要和思维导图..."):
                     try:
                         llm = LLMProcessor(api_key, api_type=api_type)
+
+                        # 4a. AI 摘要
                         result = llm.summarize(text)
                         st.session_state.summary = result
+
+                        # 4b. AI 思维导图（LLM 模式覆盖 NLP 版本）
+                        mm_result = llm.generate_mindmap(text)
+                        if mm_result.get("success"):
+                            st.session_state.mindmap_html = builder_mm.generate_markmap_html(
+                                mm_result["content"]
+                            )
+                        # 失败时保留 NLP 版本（已在上面生成）
                     except Exception as e:
                         st.session_state.summary = {
                             "success": False,
-                            "content": f"AI 摘要生成异常: {str(e)}"
+                            "content": f"AI 增强异常: {str(e)}"
                         }
+                        # mindmap_html 保留 NLP 版本，无需额外处理
 
 
 def query_keyword_info(keyword, api_key, api_type):
@@ -114,6 +144,19 @@ def export_graph_as_html():
         st.success("点击上方链接即可下载")
     else:
         st.warning("请先生成知识图谱")
+
+
+def export_mindmap_as_html():
+    """将当前思维导图导出为独立的 HTML 文件"""
+    if "mindmap_html" in st.session_state and st.session_state.mindmap_html:
+        import base64
+        html_bytes = st.session_state.mindmap_html.encode("utf-8")
+        b64 = base64.b64encode(html_bytes).decode()
+        href = f'<a href="data:text/html;base64,{b64}" download="mindmap.html">📥 下载思维导图 HTML</a>'
+        st.markdown(href, unsafe_allow_html=True)
+        st.success("点击上方链接即可下载")
+    else:
+        st.warning("请先生成思维导图")
 
 
 # ============================================================
@@ -189,8 +232,11 @@ with st.sidebar:
     st.subheader("📤 导出")
     col_export1, col_export2 = st.columns(2)
     with col_export1:
-        if st.button("导出 HTML", use_container_width=True):
+        if st.button("导出图谱 HTML", use_container_width=True):
             export_graph_as_html()
+    with col_export2:
+        if st.button("导出导图 HTML", use_container_width=True):
+            export_mindmap_as_html()
 
 # ============================================================
 # 主区域 - 两列布局
@@ -225,22 +271,33 @@ with col1:
 
     # --- 模式3: 图片上传 OCR ---
     elif mode == "🖼️ 图片上传(OCR)":
-        uploaded_file = st.file_uploader(
-            "上传包含文字的图片",
-            type=["jpg", "png", "jpeg", "bmp", "webp"]
-        )
-        if uploaded_file and st.button("🚀 OCR 识别并生成图谱", type="primary", use_container_width=True):
-            with st.spinner("正在进行 OCR 识别..."):
-                ocr = OCRProcessor()
-                text = ocr.extract_text(uploaded_file)
-                if text and not text.startswith("OCR"):
-                    st.success("OCR 识别完成！")
-                    with st.expander("📋 查看识别结果"):
-                        st.write(text)
-                    process_notes(text, topk_keywords, edge_threshold, enable_llm, api_key, api_type)
-                    st.rerun()
-                else:
-                    st.error(f"OCR 识别失败: {text}")
+        if not _OCR_AVAILABLE:
+            st.warning("""
+            ⚠️ **OCR 功能在当前环境不可用**
+
+            PaddleOCR（约 500MB）在 Streamlit Cloud 免费版上无法安装。如需使用 OCR：
+            - **本地运行**：执行 `pip install -r requirements-ocr.txt` 后启动
+            - **升级部署**：使用付费版 Streamlit Cloud（2GB+ 内存）或自建服务器
+
+            其他功能（文本输入、AI 摘要、知识图谱）不受影响。
+            """)
+        else:
+            uploaded_file = st.file_uploader(
+                "上传包含文字的图片",
+                type=["jpg", "png", "jpeg", "bmp", "webp"]
+            )
+            if uploaded_file and st.button("🚀 OCR 识别并生成图谱", type="primary", use_container_width=True):
+                with st.spinner("正在进行 OCR 识别..."):
+                    ocr = OCRProcessor()
+                    text = ocr.extract_text(uploaded_file)
+                    if text and not text.startswith("OCR"):
+                        st.success("OCR 识别完成！")
+                        with st.expander("📋 查看识别结果"):
+                            st.write(text)
+                        process_notes(text, topk_keywords, edge_threshold, enable_llm, api_key, api_type)
+                        st.rerun()
+                    else:
+                        st.error(f"OCR 识别失败: {text}")
 
     # --- 模式4: 批量导入 ---
     elif mode == "📁 批量导入":
@@ -268,12 +325,31 @@ with col1:
 # 右栏 - 知识图谱展示
 # ============================================================
 with col2:
-    st.subheader("🗺️ 知识图谱")
+    # ---- 视图切换 ----
+    col2_header, col2_toggle = st.columns([2, 1])
+    with col2_header:
+        st.subheader("📊 知识可视化")
+    with col2_toggle:
+        view_mode = st.radio(
+            "视图",
+            ["🗺️ 知识图谱", "🧠 思维导图"],
+            horizontal=True,
+            key="view_mode",
+            label_visibility="collapsed"
+        )
 
-    if st.session_state.has_result and st.session_state.graph_html:
-        st.components.v1.html(st.session_state.graph_html, height=580)
-    else:
-        st.info("👈 在左侧输入笔记，点击「生成知识图谱」按钮")
+    st.caption("💡 可在知识图谱和思维导图之间切换，无需重新生成")
+
+    if view_mode == "🗺️ 知识图谱":
+        if st.session_state.has_result and st.session_state.graph_html:
+            st.components.v1.html(st.session_state.graph_html, height=580)
+        else:
+            st.info("👈 在左侧输入笔记，点击「生成知识图谱」按钮")
+    else:  # 思维导图
+        if st.session_state.has_result and st.session_state.mindmap_html:
+            st.components.v1.html(st.session_state.mindmap_html, height=580)
+        else:
+            st.info("👈 在左侧输入笔记，点击「生成知识图谱」按钮")
 
     # ---- 关键词点击查询结果 ----
     if clicked_keyword and st.session_state.has_result:

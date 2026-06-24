@@ -101,6 +101,34 @@ class LLMProcessor:
 关键词："""
         return self._call_llm(prompt, max_tokens=200)
 
+    def generate_mindmap(self, text: str, max_depth: int = 4) -> dict:
+        """
+        使用 LLM 生成思维导图结构的 Markdown 大纲
+
+        Args:
+            text: 用户笔记内容
+            max_depth: 思维导图最大层级深度
+
+        Returns:
+            dict: {"success": bool, "content": str}，content 为 markdown 字符串
+        """
+        prompt = f"""请为以下笔记内容生成一个思维导图结构，以 Markdown 标题格式输出。
+
+要求：
+1. 用 `#` 表示中心主题（1个）
+2. 用 `##` 表示主要分支（3-6个）
+3. 用 `###` 表示次要分支（每个主要分支下2-4个）
+4. 最多使用到 `{'#' * max_depth}`（{max_depth}级标题）
+5. 每个节点内容不超过15个字，简洁有力
+6. 层级关系要体现知识的内在逻辑结构
+7. 直接输出 Markdown，不要添加任何解释、前言或后缀
+
+笔记内容：
+{text[:2000]}
+
+思维导图 Markdown："""
+        return self._call_llm(prompt, max_tokens=800)
+
     def _call_llm(self, prompt: str, max_tokens: int = 500) -> dict:
         """
         调用大模型 API，根据 api_type 自动路由到对应平台
