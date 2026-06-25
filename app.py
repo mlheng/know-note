@@ -87,6 +87,7 @@ defaults = {
     "saved_api_type": "deepseek",
     "mindmap_html": None,
     "view_mode": "🗺️ 知识图谱",
+    "ocr_text": None,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -200,8 +201,8 @@ def _render_input_area(mode, topk_keywords, edge_threshold, enable_llm, api_key,
                 ocr = OCRProcessor()
                 text = ocr.extract_text(uploaded_file)
                 if text and not text.startswith("OCR"):
+                    st.session_state.ocr_text = text
                     st.success("OCR 识别完成！")
-                    st.text_area("📋 识别结果", text, height=200)
                     process_notes(text, topk_keywords, edge_threshold, enable_llm, api_key, api_type)
                     st.rerun()
                 else:
@@ -327,6 +328,11 @@ if st.session_state.has_result:
         </div>
     </div>
     """, unsafe_allow_html=True)
+
+    # OCR 识别原文展示
+    if st.session_state.ocr_text:
+        with st.expander("📋 OCR 识别原文", expanded=False):
+            st.text_area("识别内容", st.session_state.ocr_text, height=150, disabled=True)
 
     # 视图切换 + 知识可视化
     col_viz, col_info = st.columns([2.2, 1])
