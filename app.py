@@ -201,8 +201,7 @@ def _render_input_area(mode, topk_keywords, edge_threshold, enable_llm, api_key,
                 text = ocr.extract_text(uploaded_file)
                 if text and not text.startswith("OCR"):
                     st.success("OCR 识别完成！")
-                    with st.expander("📋 查看识别结果"):
-                        st.write(text)
+                    st.text_area("📋 识别结果", text, height=200)
                     process_notes(text, topk_keywords, edge_threshold, enable_llm, api_key, api_type)
                     st.rerun()
                 else:
