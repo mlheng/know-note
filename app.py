@@ -87,10 +87,10 @@ def process_notes(text, topk_keywords, edge_threshold, enable_llm, api_key, api_
 
         # 3.5 生成思维导图（NLP 模式，始终生成，速度快无成本）
         builder_mm = MindMapBuilder()
-        nlp_mindmap_md = builder_mm.build_markdown_from_graph(
+        nlp_tree = builder_mm.build_tree_from_graph(
             builder.graph, keywords
         )
-        st.session_state.mindmap_html = builder_mm.generate_markmap_html(nlp_mindmap_md)
+        st.session_state.mindmap_html = builder_mm.generate_echarts_tree_html(nlp_tree)
 
         # 4. 可选：AI 增强（摘要 + 思维导图）
         if enable_llm:

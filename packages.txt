@@ -1,3 +1,0 @@
-# Streamlit Cloud Linux 系统依赖
-libgl1
-libglib2.0-0
