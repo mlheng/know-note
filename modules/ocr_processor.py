@@ -41,19 +41,18 @@ class OCRProcessor:
         # 2. 回退 pytesseract（轻量，需要系统包 tesseract-ocr）
         try:
             import pytesseract  # noqa: F401
-            # 尝试定位 tesseract 二进制（不一定在 PATH 上）
             tesseract_bin = self._find_tesseract_binary()
             if tesseract_bin:
                 pytesseract.pytesseract.tesseract_cmd = tesseract_bin
+                self._engine = "tesseract"
                 logger.info("OCR engine: tesseract (binary: %s)", tesseract_bin)
+                return self._engine
             else:
-                logger.warning("pytesseract installed but tesseract binary not found in common paths")
-            self._engine = "tesseract"
-            return self._engine
+                logger.warning("pytesseract installed but tesseract binary not found, trying easyocr...")
         except ImportError:
             pass
 
-        # 3. 最后回退 EasyOCR（纯 Python，无需系统包）
+        # 3. 回退 EasyOCR（纯 Python，无需系统包，云端最可靠）
         try:
             import easyocr  # noqa: F401
             self._engine = "easyocr"
