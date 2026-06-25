@@ -238,24 +238,39 @@ class KnowledgeGraphBuilder:
                 myChart.setOption(option);
 
                 // ========================================
-                // 节点点击事件 — 通过 URL query 传递关键词给 Streamlit
+                // 节点点击事件 — 通过 postMessage 桥接到 Streamlit（无页面重载）
                 // ========================================
                 myChart.on('click', function(params) {{
                     if (params.dataType === 'node') {{
                         var keyword = params.name;
-                        // 通过修改父窗口 URL query 参数通知 Streamlit
-                        try {{
-                            var currentUrl = window.parent.location.href;
-                            var baseUrl = currentUrl.split('?')[0];
-                            var newUrl = baseUrl + '?keyword=' + encodeURIComponent(keyword);
-                            window.parent.location.href = newUrl;
-                        }} catch(e) {{
-                            // 如果无法访问父窗口（本地预览场景），使用当前窗口
-                            var currentUrl = window.location.href;
-                            var baseUrl = currentUrl.split('?')[0];
-                            var newUrl = baseUrl + '?keyword=' + encodeURIComponent(keyword);
-                            window.location.href = newUrl;
+                        var hint = document.getElementById('click-hint');
+                        console.log('KNOWNOTE-KG: node clicked:', keyword);
+
+                        // 视觉反馈
+                        if (hint) {{
+                            hint.textContent = '✅ 正在查询: ' + keyword + ' ...';
+                            hint.style.color = '#1890ff';
+                            hint.style.fontWeight = 'bold';
+                            hint.style.display = 'block';
                         }}
+
+                        // 通过 postMessage 发送关键词给桥接 iframe
+                        // 桥接 iframe 负责更新 URL(pushState) + 触发 Streamlit rerun
+                        window.parent.postMessage({{
+                            type: 'knownote_click',
+                            keyword: keyword
+                        }}, '*');
+
+                        // 兜底：1.5s 后如果用 postMessage 没有触发 rerun，用传统跳转
+                        setTimeout(function() {{
+                            if (hint && hint.style.color === 'rgb(24, 144, 255)') {{
+                                hint.textContent = '⚠️ 正在尝试备用跳转方式...';
+                                hint.style.color = '#faad14';
+                                var newUrl = window.top.location.href.split('?')[0]
+                                           + '?keyword=' + encodeURIComponent(keyword);
+                                window.top.location.href = newUrl;
+                            }}
+                        }}, 1500);
                     }}
                 }});
 

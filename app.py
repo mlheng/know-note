@@ -231,6 +231,14 @@ with st.sidebar:
         if st.button("导出导图 HTML", use_container_width=True):
             export_mindmap_as_html()
 
+    # ---- 隐藏的桥接按钮（JS 点击以触发 Streamlit rerun） ----
+    st.divider()
+    bridge_clicked = st.button("·", key="__bridge_btn__",
+                                help="bridge",
+                                use_container_width=True)
+    if bridge_clicked:
+        st.rerun()
+
 # ============================================================
 # 主区域 - 两列布局
 # ============================================================
@@ -394,3 +402,64 @@ with col2:
             kw_count = len(st.session_state.keywords)
             st.metric("关键词节点数", kw_count)
             st.caption("关系强度阈值: " + str(edge_threshold))
+
+# ============================================================
+# 跨 iframe 通信桥接（放在页面底部，确保所有元素已渲染）
+# 原理：图谱/导图 iframe → postMessage → 桥接 iframe 监听 parent window
+#       → pushState 更新 URL（无重载）→ 点击隐藏的 Streamlit 按钮 → st.rerun()
+# ============================================================
+st.components.v1.html("""
+<script>
+(function() {
+    function triggerStreamlitRerun() {
+        // 在父页面中查找 bridge 按钮并点击
+        var buttons = window.parent.document.querySelectorAll('button');
+        for (var i = 0; i < buttons.length; i++) {
+            if (buttons[i].textContent.indexOf('__bridge__') >= 0 ||
+                buttons[i].getAttribute('aria-label') === 'bridge') {
+                buttons[i].click();
+                console.log('KNOWNOTE-BRIDGE: clicked bridge button');
+                return true;
+            }
+        }
+        console.log('KNOWNOTE-BRIDGE: bridge button not found');
+        return false;
+    }
+
+    // 在 parent window 上注册监听器
+    // 图谱/导图 iframe 发送 parent.postMessage → parent 接收 → 此回调触发
+    window.parent.addEventListener('message', function(event) {
+        if (!event.data || event.data.type !== 'knownote_click') return;
+        var keyword = event.data.keyword;
+        if (!keyword) return;
+        console.log('KNOWNOTE-BRIDGE: received keyword:', keyword);
+
+        // 1) pushState 更新 URL（不触发页面重载）
+        var url = new URL(window.parent.location.href);
+        url.searchParams.set('keyword', keyword);
+        window.parent.history.pushState(null, '', url.toString());
+
+        // 2) 尝试点击 Streamlit bridge 按钮触发 rerun
+        setTimeout(function() {
+            if (!triggerStreamlitRerun()) {
+                // 回退：全页跳转
+                console.log('KNOWNOTE-BRIDGE: fallback to full reload');
+                window.parent.location.href = url.toString();
+            }
+        }, 50);
+    });
+
+    // 页面加载时，检查 sessionStorage 中是否有待处理的关键词
+    var storedKw = sessionStorage.getItem('knownote_keyword');
+    if (storedKw) {
+        sessionStorage.removeItem('knownote_keyword');
+        var url = new URL(window.parent.location.href);
+        if (!url.searchParams.get('keyword')) {
+            url.searchParams.set('keyword', storedKw);
+            window.parent.history.replaceState(null, '', url.toString());
+        }
+        setTimeout(function() { triggerStreamlitRerun(); }, 300);
+    }
+})();
+</script>
+""", height=0)

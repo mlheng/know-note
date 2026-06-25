@@ -292,25 +292,41 @@ class MindMapBuilder:
             myChart.setOption(option);
 
             // ========================================
-            // 单击节点 → AI 查询（通过 URL query 传递关键词给 Streamlit）
+            // 单击节点 → AI 查询（通过 postMessage 桥接到 Streamlit，无页面重载）
             // 注：ECharts tree 的 params.dataType 为 undefined，
             //     直接用 params.name 判断是否为节点点击
             // ========================================
             myChart.on('click', function(params) {{
                 if (params.name) {{
                     var keyword = params.name;
-                    try {{
-                        var currentUrl = window.parent.location.href;
-                        var baseUrl = currentUrl.split('?')[0];
-                        var newUrl = baseUrl + '?keyword=' + encodeURIComponent(keyword);
-                        window.parent.location.href = newUrl;
-                    }} catch(e) {{
-                        // fallback: 修改当前窗口 URL（srcdoc iframe 同源场景不会到这里）
-                        var currentUrl = window.location.href;
-                        var baseUrl = currentUrl.split('?')[0];
-                        var newUrl = baseUrl + '?keyword=' + encodeURIComponent(keyword);
-                        window.location.href = newUrl;
+                    var hint = document.getElementById('click-hint');
+                    console.log('KNOWNOTE-MM: node clicked:', keyword);
+
+                    // 视觉反馈
+                    if (hint) {{
+                        hint.textContent = '✅ 正在查询: ' + keyword + ' ...';
+                        hint.style.color = '#1890ff';
+                        hint.style.fontWeight = 'bold';
+                        hint.style.display = 'block';
                     }}
+
+                    // 通过 postMessage 发送关键词给桥接 iframe
+                    // 桥接 iframe 负责更新 URL(pushState) + 触发 Streamlit rerun
+                    window.parent.postMessage({{
+                        type: 'knownote_click',
+                        keyword: keyword
+                    }}, '*');
+
+                    // 兜底：1.5s 后如果 postMessage 没有触发 rerun，用传统跳转
+                    setTimeout(function() {{
+                        if (hint && hint.style.color === 'rgb(24, 144, 255)') {{
+                            hint.textContent = '⚠️ 正在尝试备用跳转方式...';
+                            hint.style.color = '#faad14';
+                            var newUrl = window.top.location.href.split('?')[0]
+                                       + '?keyword=' + encodeURIComponent(keyword);
+                            window.top.location.href = newUrl;
+                        }}
+                    }}, 1500);
                 }}
             }});
 
