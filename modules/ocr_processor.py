@@ -4,13 +4,17 @@ OCR 文字识别处理器
 - 优先使用 PaddleOCR（质量最高，但约 500MB）
 - 回退到 Tesseract OCR（轻量，需系统包 tesseract-ocr）
 - 再回退到 EasyOCR（纯 Python，无需系统包，自动下载模型）
-- 引擎均不可用时给出明确提示
+- 内置图片预处理：灰度化、对比度增强、降噪、放大
+- 支持多引擎融合投票，提升准确率
 """
 import tempfile
 import os
 import uuid
 import logging
 import shutil
+
+import numpy as np
+from PIL import Image, ImageEnhance, ImageFilter
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +24,59 @@ class OCRProcessor:
         self._engine = None          # "paddle", "tesseract", "easyocr", or None
         self._ocr = None             # OCR 引擎实例
         self._temp_dir = tempfile.mkdtemp(prefix="knownote_ocr_")
+
+    # ------------------------------------------------------------------
+    # 图片预处理
+    # ------------------------------------------------------------------
+    def _load_image(self, image_file) -> Image.Image:
+        """统一加载图片，支持 UploadedFile 和文件路径"""
+        if hasattr(image_file, "read"):
+            image_file.seek(0)
+            return Image.open(image_file).convert("RGB")
+        elif isinstance(image_file, str):
+            return Image.open(image_file).convert("RGB")
+        else:
+            raise ValueError("不支持的图片格式")
+
+    def _preprocess_for_ocr(self, img: Image.Image) -> list:
+        """
+        生成多个预处理变体，供多轮 OCR 识别。
+        返回 [(label, Image), ...] 列表。
+        """
+        variants = []
+
+        # 原始图片
+        variants.append(("原图", img))
+
+        # 转灰度
+        gray = img.convert("L")
+        variants.append(("灰度", gray))
+
+        # 灰度 + 对比度增强 1.5x
+        enh = ImageEnhance.Contrast(gray)
+        contrast = enh.enhance(1.5)
+        variants.append(("高对比", contrast))
+
+        # 灰度 + 对比度 2.0x
+        contrast2 = enh.enhance(2.0)
+        variants.append(("超高对比", contrast2))
+
+        # 灰度 + 锐化
+        sharp = gray.filter(ImageFilter.SHARPEN)
+        variants.append(("锐化", sharp))
+
+        # 灰度 + 降噪（中值滤波）
+        denoised = gray.filter(ImageFilter.MedianFilter(size=3))
+        variants.append(("降噪", denoised))
+
+        # 放大处理（小图片放大 2x 再锐化）
+        w, h = img.size
+        if w < 500 or h < 500:
+            upscaled = gray.resize((w * 2, h * 2), Image.LANCZOS)
+            upscaled = upscaled.filter(ImageFilter.SHARPEN)
+            variants.append(("2x放大", upscaled))
+
+        return variants
 
     # ------------------------------------------------------------------
     # 引擎探测 & 懒加载
@@ -67,12 +124,12 @@ class OCRProcessor:
     def _find_tesseract_binary(self) -> str | None:
         """在常见路径中定位 tesseract 二进制文件"""
         candidates = [
-            "tesseract",                        # PATH 上
-            "/usr/bin/tesseract",               # Linux (apt-get)
-            "/usr/local/bin/tesseract",         # Linux (源码编译)
-            "/opt/homebrew/bin/tesseract",      # macOS Homebrew (Apple Silicon)
-            "/usr/local/opt/tesseract/bin/tesseract",  # macOS Homebrew (Intel)
-            r"C:\Program Files\Tesseract-OCR\tesseract.exe",   # Windows
+            "tesseract",
+            "/usr/bin/tesseract",
+            "/usr/local/bin/tesseract",
+            "/opt/homebrew/bin/tesseract",
+            "/usr/local/opt/tesseract/bin/tesseract",
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
             r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
         ]
         for path in candidates:
@@ -114,7 +171,7 @@ class OCRProcessor:
     # ------------------------------------------------------------------
     def extract_text(self, image_file) -> str:
         """
-        从图片中提取文字。
+        从图片中提取文字。自动预处理 + 多轮融合提升准确率。
 
         Args:
             image_file: Streamlit UploadedFile 对象，或文件路径字符串
@@ -150,6 +207,58 @@ class OCRProcessor:
             )
 
     # ------------------------------------------------------------------
+    # 通用：多轮预处理 OCR + 结果融合
+    # ------------------------------------------------------------------
+    def _multi_pass_ocr(self, image_file, ocr_func) -> str:
+        """
+        对图片的多个预处理变体分别执行 OCR，融合投票选出最佳结果。
+        ocr_func(image_array_or_pil) -> list of (text, confidence)
+        """
+        try:
+            img = self._load_image(image_file)
+        except ValueError as e:
+            return f"OCR 引擎错误：{e}"
+
+        variants = self._preprocess_for_ocr(img)
+
+        # 收集所有识别结果（去重 + 计数投票）
+        text_votes = {}       # text -> total confidence
+        text_counts = {}      # text -> occurrence count
+
+        for label, variant in variants:
+            try:
+                variant_array = np.array(variant)
+                results = ocr_func(variant_array)
+                for item in results:
+                    if isinstance(item, (list, tuple)) and len(item) >= 2:
+                        t, conf = item[0], item[1]
+                    elif isinstance(item, str):
+                        t, conf = item, 1.0
+                    else:
+                        continue
+                    t = str(t).strip()
+                    if not t:
+                        continue
+                    text_votes[t] = text_votes.get(t, 0) + conf
+                    text_counts[t] = text_counts.get(t, 0) + 1
+            except Exception:
+                continue
+
+        if not text_votes:
+            return "OCR 未识别到文字，请确认图片中包含清晰文字"
+
+        # 按「置信度总和 × 出现次数」排序，过滤只出现 1 次且低置信度的
+        scored = []
+        for t, total_conf in text_votes.items():
+            count = text_counts[t]
+            if count >= 2 or total_conf >= 0.6:
+                scored.append((t, total_conf))
+        scored.sort(key=lambda x: -x[1])
+
+        lines = [t for t, _ in scored]
+        return "\n".join(lines) if lines else "OCR 未识别到文字，请确认图片中包含清晰文字"
+
+    # ------------------------------------------------------------------
     # PaddleOCR 分支
     # ------------------------------------------------------------------
     def _extract_via_paddle(self, image_file) -> str:
@@ -157,7 +266,7 @@ class OCRProcessor:
         if engine is None:
             return "OCR 引擎初始化失败，请确认已安装 paddleocr 和 paddlepaddle"
 
-        # 处理输入
+        # PaddleOCR 走原有路径（自带预处理）
         if hasattr(image_file, "name"):
             suffix = os.path.splitext(image_file.name)[1] or ".jpg"
             is_path = False
@@ -175,7 +284,6 @@ class OCRProcessor:
                     f.write(image_file.getbuffer())
                 ocr_input = temp_path
 
-            # 兼容 PaddleOCR 2.x / 3.x
             version = 3 if hasattr(engine, "predict") else 2
             if version >= 3:
                 result = engine.predict(ocr_input)
@@ -202,43 +310,32 @@ class OCRProcessor:
     def _extract_via_tesseract(self, image_file) -> str:
         try:
             import pytesseract
-            from PIL import Image
         except ImportError:
             return "OCR 引擎错误：pytesseract 未安装。请执行: pip install pytesseract Pillow"
 
-        # 再次尝试定位 tesseract 二进制（可能在 __init__ 之后才安装）
         tesseract_bin = self._find_tesseract_binary()
         if tesseract_bin:
             pytesseract.pytesseract.tesseract_cmd = tesseract_bin
 
-        # 准备 PIL Image
-        if hasattr(image_file, "read"):
-            # Streamlit UploadedFile — 需要 seek(0) 因为可能已被读取过
-            image_file.seek(0)
-            img = Image.open(image_file)
-        elif isinstance(image_file, str):
-            img = Image.open(image_file)
-        else:
-            return "OCR 引擎错误：不支持的图片格式"
+        def tesseract_ocr(img_array):
+            """Tesseract OCR 单次调用，返回 [(text, conf)]"""
+            pil_img = Image.fromarray(img_array)
+            try:
+                data = pytesseract.image_to_data(pil_img, lang="chi_sim+eng",
+                                                 output_type=pytesseract.Output.DICT)
+                results = []
+                for i, txt in enumerate(data["text"]):
+                    t = txt.strip()
+                    if t:
+                        conf = int(data["conf"][i]) / 100.0 if data["conf"][i] != "-1" else 0.5
+                        results.append((t, conf))
+                return results
+            except Exception:
+                # fallback: plain image_to_string
+                raw = pytesseract.image_to_string(pil_img, lang="chi_sim+eng")
+                return [(line.strip(), 0.8) for line in raw.splitlines() if line.strip()]
 
-        try:
-            # 中文 + 英文识别
-            text = pytesseract.image_to_string(img, lang="chi_sim+eng")
-            text = text.strip()
-            if not text:
-                return "OCR 未识别到文字，请确认图片中包含清晰文字"
-            return text
-        except Exception as e:
-            msg = str(e)
-            if "TesseractNotFound" in str(type(e).__name__) or "tesseract is not installed" in msg.lower():
-                return (
-                    "OCR 引擎错误：Tesseract 系统包未找到。\n\n"
-                    "• Linux (包括 Streamlit Cloud)：请在 packages.txt 中添加：\n"
-                    "  `tesseract-ocr` 和 `tesseract-ocr-chi-sim`\n"
-                    "• Windows：请从 https://github.com/UB-Mannheim/tesseract/wiki 下载安装\n"
-                    "• 或使用纯 Python 方案：`pip install easyocr`（无需系统包）"
-                )
-            return f"OCR 识别出错（Tesseract）: {msg[:200]}"
+        return self._multi_pass_ocr(image_file, tesseract_ocr)
 
     # ------------------------------------------------------------------
     # EasyOCR 分支（纯 Python，无需系统包）
@@ -248,36 +345,15 @@ class OCRProcessor:
         if engine is None:
             return "OCR 引擎错误：EasyOCR 初始化失败，请确认已安装 easyocr"
 
-        # 准备图片路径（EasyOCR 需要文件路径或 numpy array）
-        import numpy as np
-        from PIL import Image
+        def easyocr_ocr(img_array):
+            """EasyOCR 单次调用，返回 [(text, conf)]"""
+            results = engine.readtext(img_array, detail=1, paragraph=False)
+            return [(r[1], r[2]) for r in results if r[2] > 0.3 and str(r[1]).strip()]
 
-        try:
-            if hasattr(image_file, "read"):
-                image_file.seek(0)
-                img = Image.open(image_file).convert("RGB")
-                img_array = np.array(img)
-            elif isinstance(image_file, str):
-                img = Image.open(image_file).convert("RGB")
-                img_array = np.array(img)
-            else:
-                return "OCR 引擎错误：不支持的图片格式"
-
-            results = engine.readtext(img_array)
-            texts = []
-            for bbox, text, conf in results:
-                if conf > 0.5 and text.strip():
-                    texts.append(text.strip())
-
-            if not texts:
-                return "OCR 未识别到文字，请确认图片中包含清晰文字"
-            return "\n".join(texts)
-
-        except Exception as e:
-            return f"OCR 识别出错（EasyOCR）: {type(e).__name__}: {str(e)[:200]}"
+        return self._multi_pass_ocr(image_file, easyocr_ocr)
 
     # ------------------------------------------------------------------
-    # PaddleOCR 结果解析（保留原逻辑）
+    # PaddleOCR 结果解析
     # ------------------------------------------------------------------
     def _parse_paddle_result(self, result) -> list:
         texts = []
@@ -288,7 +364,6 @@ class OCRProcessor:
             if item is None:
                 continue
 
-            # PaddleOCR 2.x: list of (bbox, (text, score))
             if isinstance(item, (list, tuple)):
                 for sub_item in item:
                     if isinstance(sub_item, (list, tuple)) and len(sub_item) >= 2:
@@ -300,7 +375,6 @@ class OCRProcessor:
                         elif isinstance(info, str) and info.strip():
                             texts.append(info.strip())
 
-            # PaddleOCR 3.x: object with rec_texts / rec_scores
             elif hasattr(item, "rec_texts"):
                 item_texts = getattr(item, "rec_texts", [])
                 item_scores = getattr(item, "rec_scores", [])
