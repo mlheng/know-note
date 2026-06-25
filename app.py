@@ -4,14 +4,7 @@ from modules.nlp_processor import NLPProcessor
 from modules.graph_builder import KnowledgeGraphBuilder
 from modules.llm_processor import LLMProcessor
 from modules.mindmap_builder import MindMapBuilder
-
-# OCR 为可选依赖（PaddleOCR 约 500MB，Streamlit Cloud 免费版不支持）
-_OCR_AVAILABLE = False
-try:
-    from modules.ocr_processor import OCRProcessor
-    _OCR_AVAILABLE = True
-except ImportError:
-    pass
+from modules.ocr_processor import OCRProcessor
 
 # ============================================================
 # 页面配置 — 必须是第一个 Streamlit 命令
@@ -194,7 +187,7 @@ with st.sidebar:
 
     # 高级功能开关
     st.subheader("🤖 AI 增强")
-    enable_llm = st.checkbox("启用 AI 摘要（需 API Key）")
+    enable_llm = st.checkbox("启用 AI 增强（摘要/详解/联想）")
     api_key = st.session_state.saved_api_key
     api_type = st.session_state.saved_api_type
     if enable_llm:
@@ -271,33 +264,22 @@ with col1:
 
     # --- 模式3: 图片上传 OCR ---
     elif mode == "🖼️ 图片上传(OCR)":
-        if not _OCR_AVAILABLE:
-            st.warning("""
-            ⚠️ **OCR 功能在当前环境不可用**
-
-            PaddleOCR（约 500MB）在 Streamlit Cloud 免费版上无法安装。如需使用 OCR：
-            - **本地运行**：执行 `pip install -r requirements-ocr.txt` 后启动
-            - **升级部署**：使用付费版 Streamlit Cloud（2GB+ 内存）或自建服务器
-
-            其他功能（文本输入、AI 摘要、知识图谱）不受影响。
-            """)
-        else:
-            uploaded_file = st.file_uploader(
-                "上传包含文字的图片",
-                type=["jpg", "png", "jpeg", "bmp", "webp"]
-            )
-            if uploaded_file and st.button("🚀 OCR 识别并生成图谱", type="primary", use_container_width=True):
-                with st.spinner("正在进行 OCR 识别..."):
-                    ocr = OCRProcessor()
-                    text = ocr.extract_text(uploaded_file)
-                    if text and not text.startswith("OCR"):
-                        st.success("OCR 识别完成！")
-                        with st.expander("📋 查看识别结果"):
-                            st.write(text)
-                        process_notes(text, topk_keywords, edge_threshold, enable_llm, api_key, api_type)
-                        st.rerun()
-                    else:
-                        st.error(f"OCR 识别失败: {text}")
+        uploaded_file = st.file_uploader(
+            "上传包含文字的图片",
+            type=["jpg", "png", "jpeg", "bmp", "webp"]
+        )
+        if uploaded_file and st.button("🚀 OCR 识别并生成图谱", type="primary", use_container_width=True):
+            with st.spinner("正在进行 OCR 识别..."):
+                ocr = OCRProcessor()
+                text = ocr.extract_text(uploaded_file)
+                if text and not text.startswith("OCR"):
+                    st.success("OCR 识别完成！")
+                    with st.expander("📋 查看识别结果"):
+                        st.write(text)
+                    process_notes(text, topk_keywords, edge_threshold, enable_llm, api_key, api_type)
+                    st.rerun()
+                else:
+                    st.error(f"OCR 识别失败: {text}")
 
     # --- 模式4: 批量导入 ---
     elif mode == "📁 批量导入":
@@ -351,13 +333,15 @@ with col2:
         else:
             st.info("👈 在左侧输入笔记，点击「生成知识图谱」按钮")
 
-    # ---- 关键词点击查询结果 ----
-    if clicked_keyword and st.session_state.has_result:
-        # 去重：如果已经查询过同一个关键词，不再重复查询
+    # ---- 关键词点击查询结果（独立于 has_result，支持从图谱节点点击跳转后查询） ----
+    if clicked_keyword:
+        # 去重：同一关键词不重复查询，除非上次查询失败（如缺 API Key）
         last_queried = st.session_state.get("_last_queried_keyword", "")
-        if clicked_keyword != last_queried or st.session_state.get("keyword_info") is None:
+        prev_info = st.session_state.get("keyword_info")
+        prev_failed = prev_info is not None and not prev_info.get("success", True)
+        if clicked_keyword != last_queried or prev_info is None or prev_failed:
             st.session_state._last_queried_keyword = clicked_keyword
-            with st.spinner(f"正在查询「{clicked_keyword}」的 AI 详解..."):
+            with st.spinner(f"正在查询「{clicked_keyword}」的 AI 详解与知识联想..."):
                 result = query_keyword_info(clicked_keyword, api_key, api_type)
                 st.session_state.keyword_info = result
 
@@ -365,11 +349,13 @@ with col2:
         if st.session_state.keyword_info:
             result = st.session_state.keyword_info
             if result.get("success"):
-                st.success(f"✅ 「**{clicked_keyword}**」AI 详解已生成")
-                with st.expander(f"🤖 「{clicked_keyword}」详解", expanded=True):
+                if not st.session_state.has_result:
+                    st.info("💡 图谱数据已过期，但 AI 查询结果已生成。重新输入笔记并生成即可恢复图谱。")
+                st.success(f"✅ 「**{clicked_keyword}**」AI 详解与知识联想已生成")
+                with st.expander(f"🤖 「{clicked_keyword}」详解与联想", expanded=True):
                     st.markdown(result["content"])
                     # 清除按钮
-                    if st.button("❌ 关闭详解", key="clear_keyword_info"):
+                    if st.button("❌ 关闭", key="clear_keyword_info"):
                         st.session_state.keyword_info = None
                         st.session_state._last_queried_keyword = ""
                         st.query_params.clear()
@@ -392,13 +378,13 @@ with col2:
     # ---- 关键词标签 ----
     if st.session_state.keywords:
         st.subheader("🏷️ 核心关键词")
-        st.caption("点击图谱节点或下方按钮可查询 AI 详解")
+        st.caption("点击图谱节点或下方按钮可查询 AI 详解与知识联想")
         cols = st.columns(5)
         for i, kw in enumerate(st.session_state.keywords[:15]):
             with cols[i % 5]:
                 # 用 link_button 模拟，点击后设置 query_param
                 if st.button(kw, key=f"kw_{i}", use_container_width=True,
-                             help=f"点击查询「{kw}」的 AI 详解"):
+                             help=f"点击查询「{kw}」的 AI 详解与知识联想"):
                     st.query_params["keyword"] = kw
                     st.rerun()
 

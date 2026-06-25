@@ -1,4 +1,10 @@
 # modules/ocr_processor.py
+"""
+OCR 文字识别处理器
+- 优先使用 PaddleOCR（质量最高，但约 500MB）
+- 云端回退到 Tesseract OCR（轻量，约 50MB）
+- 两款引擎均不可用时给出明确提示
+"""
 import tempfile
 import os
 import uuid
@@ -8,48 +14,65 @@ logger = logging.getLogger(__name__)
 
 
 class OCRProcessor:
-    """
-    OCR 文字识别处理器，基于 PaddleOCR。
-    兼容 PaddleOCR 2.x 和 3.x 两个大版本。
-    不依赖 Streamlit，可独立使用。
-    """
-
     def __init__(self):
-        self.ocr = None
+        self._engine = None          # "paddle", "tesseract", or None
+        self._ocr = None             # OCR 引擎实例
         self._temp_dir = tempfile.mkdtemp(prefix="knownote_ocr_")
-        self._paddleocr_version = 3  # 默认假设 3.x
 
-    def init_engine(self):
-        """懒加载 OCR 引擎，失败返回 None"""
-        if self.ocr is not None:
-            return self.ocr
+    # ------------------------------------------------------------------
+    # 引擎探测 & 懒加载
+    # ------------------------------------------------------------------
+    def _detect_engine(self) -> str:
+        """探测可用的 OCR 引擎，返回 "paddle" / "tesseract" / None"""
+        if self._engine is not None:
+            return self._engine
 
+        # 1. 优先 PaddleOCR（质量最好）
+        try:
+            from paddleocr import PaddleOCR  # noqa: F401
+            self._engine = "paddle"
+            return self._engine
+        except ImportError:
+            pass
+
+        # 2. 回退 Tesseract（轻量）
+        try:
+            import pytesseract  # noqa: F401
+            # 确认 tesseract 二进制可用
+            try:
+                pytesseract.get_tesseract_version()
+            except Exception:
+                logger.warning("pytesseract installed but tesseract binary not found")
+                self._engine = None
+                return None
+            self._engine = "tesseract"
+            return self._engine
+        except ImportError:
+            pass
+
+        self._engine = None
+        return None
+
+    def _init_paddle(self):
+        """初始化 PaddleOCR"""
+        if self._ocr is not None:
+            return self._ocr
         try:
             from paddleocr import PaddleOCR
-
-            # PaddleOCR 2.x 和 3.x 的 `lang` 参数都有效，无法用参数区分版本。
-            # 用 2.x 参数初始化（2.x 最稳定），失败再回退 3.x。
             try:
-                self.ocr = PaddleOCR(
-                    use_angle_cls=True,
-                    lang="ch",
-                    show_log=False,
+                self._ocr = PaddleOCR(
+                    use_angle_cls=True, lang="ch", show_log=False
                 )
             except (ValueError, TypeError):
-                # 2.x 参数失败，尝试 3.x
-                self.ocr = PaddleOCR(lang="ch")
-
-            # 根据对象拥有的方法精确判断版本（避免误判）
-            self._paddleocr_version = 3 if hasattr(self.ocr, "predict") else 2
-
-            return self.ocr
-
-        except ImportError:
-            return None
+                self._ocr = PaddleOCR(lang="ch")
+            return self._ocr
         except Exception as e:
             logger.warning("PaddleOCR init failed: %s", e)
             return None
 
+    # ------------------------------------------------------------------
+    # 对外接口
+    # ------------------------------------------------------------------
     def extract_text(self, image_file) -> str:
         """
         从图片中提取文字。
@@ -58,13 +81,31 @@ class OCRProcessor:
             image_file: Streamlit UploadedFile 对象，或文件路径字符串
 
         Returns:
-            识别出的文本字符串
+            识别出的文本字符串（失败时以 "OCR" 开头）
         """
-        engine = self.init_engine()
+        engine = self._detect_engine()
+
+        if engine == "paddle":
+            return self._extract_via_paddle(image_file)
+        elif engine == "tesseract":
+            return self._extract_via_tesseract(image_file)
+        else:
+            return (
+                "OCR 引擎未安装。\n\n"
+                "• 本地运行：pip install paddlepaddle paddleocr （质量最佳）\n"
+                "  或 pip install pytesseract （需额外安装 tesseract-ocr）\n"
+                "• 云端部署：Streamlit Cloud 免费版推荐 pytesseract"
+            )
+
+    # ------------------------------------------------------------------
+    # PaddleOCR 分支
+    # ------------------------------------------------------------------
+    def _extract_via_paddle(self, image_file) -> str:
+        engine = self._init_paddle()
         if engine is None:
             return "OCR 引擎初始化失败，请确认已安装 paddleocr 和 paddlepaddle"
 
-        # 使用唯一文件名避免并发冲突
+        # 处理输入
         if hasattr(image_file, "name"):
             suffix = os.path.splitext(image_file.name)[1] or ".jpg"
             is_path = False
@@ -76,54 +117,75 @@ class OCRProcessor:
 
         try:
             if is_path:
-                # 直接传入文件路径
                 ocr_input = image_file
             else:
-                # 保存 Streamlit UploadedFile 到临时路径
                 with open(temp_path, "wb") as f:
                     f.write(image_file.getbuffer())
                 ocr_input = temp_path
 
-            # 执行 OCR 识别（兼容 2.x 和 3.x）
-            if self._paddleocr_version >= 3:
+            # 兼容 PaddleOCR 2.x / 3.x
+            version = 3 if hasattr(engine, "predict") else 2
+            if version >= 3:
                 result = engine.predict(ocr_input)
             else:
                 result = engine.ocr(ocr_input, cls=True)
 
-            # 解析结果（兼容新旧格式）
-            extracted_text = self._parse_result(result)
-
-            if not extracted_text:
-                return "OCR 未识别到文字内容，请确认图片中包含清晰文字"
-
-            return "\n".join(extracted_text)
+            texts = self._parse_paddle_result(result)
+            if not texts:
+                return "OCR 未识别到文字，请确认图片中包含清晰文字"
+            return "\n".join(texts)
 
         except Exception as e:
             return f"OCR 识别出错: {type(e).__name__}: {str(e)}"
-
         finally:
-            # 清理临时文件
             try:
                 if not is_path and os.path.exists(temp_path):
                     os.remove(temp_path)
             except OSError:
                 pass
 
-    def _parse_result(self, result) -> list:
-        """
-        解析 OCR 结果，兼容 PaddleOCR 2.x 和 3.x 的返回格式。
+    # ------------------------------------------------------------------
+    # Tesseract 分支
+    # ------------------------------------------------------------------
+    def _extract_via_tesseract(self, image_file) -> str:
+        try:
+            import pytesseract
+            from PIL import Image
+        except ImportError:
+            return "Tesseract 未安装。请执行: pip install pytesseract Pillow"
 
-        PaddleOCR 2.x 格式:
-            [[ (bbox, (text, confidence)), ... ], ...]   ← 按图片分组
-            每个元素: ([[x1,y1],...], ("文字", 0.95))
+        # 准备 PIL Image
+        if hasattr(image_file, "read"):
+            # Streamlit UploadedFile
+            img = Image.open(image_file)
+        elif isinstance(image_file, str):
+            img = Image.open(image_file)
+        else:
+            return "不支持的图片格式"
 
-        PaddleOCR 3.x 格式:
-            [OCRResult(...), ...]   ← 每个图片一个结果对象
-            OCRResult 有属性: rec_texts, rec_scores, det_bboxes
-            或是一个可迭代对象，每个元素有属性: rec_text, rec_score
-        """
+        try:
+            # 中文 + 英文识别
+            text = pytesseract.image_to_string(img, lang="chi_sim+eng")
+            text = text.strip()
+            if not text:
+                return "OCR 未识别到文字，请确认图片中包含清晰文字"
+            return text
+        except Exception as e:
+            msg = str(e)
+            if "TesseractNotFound" in str(type(e).__name__) or "tesseract is not installed" in msg:
+                return (
+                    "Tesseract OCR 系统包未安装。\n\n"
+                    "云端部署请在 packages.txt 中添加：\n"
+                    "  tesseract-ocr\n"
+                    "  tesseract-ocr-chi-sim"
+                )
+            return f"Tesseract OCR 识别出错: {msg[:200]}"
+
+    # ------------------------------------------------------------------
+    # PaddleOCR 结果解析（保留原逻辑）
+    # ------------------------------------------------------------------
+    def _parse_paddle_result(self, result) -> list:
         texts = []
-
         if not result:
             return texts
 
@@ -131,25 +193,20 @@ class OCRProcessor:
             if item is None:
                 continue
 
-            # ---- 格式探测：PaddleOCR 2.x ----
-            # item 是一个 list，元素为 (bbox, (text, score))
+            # PaddleOCR 2.x: list of (bbox, (text, score))
             if isinstance(item, (list, tuple)):
                 for sub_item in item:
                     if isinstance(sub_item, (list, tuple)) and len(sub_item) >= 2:
-                        # sub_item = (bbox, (text, score))  2.x 格式
                         info = sub_item[1]
                         if isinstance(info, (list, tuple)) and len(info) >= 2:
-                            text = info[0]
-                            score = info[1]
+                            text, score = info[0], info[1]
                             if score > 0.5 and text.strip():
                                 texts.append(text.strip())
-                        elif isinstance(info, str):
-                            if info.strip():
-                                texts.append(info.strip())
+                        elif isinstance(info, str) and info.strip():
+                            texts.append(info.strip())
 
-            # ---- 格式探测：PaddleOCR 3.x 对象 ----
+            # PaddleOCR 3.x: object with rec_texts / rec_scores
             elif hasattr(item, "rec_texts"):
-                # OCRResult 对象，有 rec_texts 和 rec_scores 属性
                 item_texts = getattr(item, "rec_texts", [])
                 item_scores = getattr(item, "rec_scores", [])
                 for i, t in enumerate(item_texts):
@@ -158,13 +215,11 @@ class OCRProcessor:
                         texts.append(t.strip())
 
             elif hasattr(item, "rec_text"):
-                # 单个识别结果对象
-                text = getattr(item, "rec_text", "")
-                score = getattr(item, "rec_score", 1.0)
-                if score > 0.5 and text.strip():
-                    texts.append(text.strip())
+                t = getattr(item, "rec_text", "")
+                s = getattr(item, "rec_score", 1.0)
+                if s > 0.5 and t.strip():
+                    texts.append(t.strip())
 
-            # ---- 格式探测：纯字典 ----
             elif isinstance(item, dict):
                 if "rec_texts" in item:
                     for t, s in zip(item.get("rec_texts", []),
@@ -173,8 +228,7 @@ class OCRProcessor:
                             texts.append(t.strip())
                 elif "rec_text" in item:
                     t = item["rec_text"]
-                    s = item.get("rec_score", 1.0)
-                    if s > 0.5 and t.strip():
+                    if t.strip():
                         texts.append(t.strip())
                 elif "text" in item:
                     t = item["text"]
@@ -184,7 +238,6 @@ class OCRProcessor:
         return texts
 
     def __del__(self):
-        """清理临时目录"""
         try:
             if hasattr(self, "_temp_dir") and os.path.exists(self._temp_dir):
                 import shutil

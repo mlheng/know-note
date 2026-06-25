@@ -69,7 +69,7 @@ class LLMProcessor:
 
     def get_keyword_info(self, keyword: str, context: str = "") -> dict:
         """
-        查询某个关键词的详细信息，返回 {success, content} 字典
+        查询某个关键词的 AI 详解与知识联想，返回 {success, content} 字典
 
         Args:
             keyword: 要查询的关键词
@@ -79,18 +79,19 @@ class LLMProcessor:
         if context:
             context_part = f"\n\n用户笔记上下文：\n{context[:1500]}"
 
-        prompt = f"""请对以下关键词进行详细解释和知识扩展：
+        prompt = f"""请对以下关键词进行详细解释，并联想与其相关的知识点：
 
 关键词：{keyword}{context_part}
 
 请从以下几个方面回答（使用 Markdown 格式）：
-1. **定义**：简要定义该关键词
-2. **核心要点**：列出 3-5 个核心知识点
-3. **关联概念**：与该关键词相关的其他重要概念
-4. **学习建议**：如何进一步学习该主题
+1. **📖 概念解释**：用通俗易懂的语言解释该关键词的含义（2-3句话）
+2. **🔑 核心要点**：列出 3-5 个最重要的知识点或特征
+3. **🔗 知识联想**：关联 3-5 个与之密切相关的概念或知识点，并简要说明它们之间的关系
+4. **💡 应用场景**：该知识在实际中有哪些典型应用（1-2个例子）
+5. **📚 学习路径**：推荐进一步深入学习的方向或资源
 
-要求：简洁清晰，总字数在 300 字以内。"""
-        return self._call_llm(prompt, max_tokens=600)
+要求：内容充实有深度，总字数在 400 字以内，格式清晰易读。"""
+        return self._call_llm(prompt, max_tokens=800)
 
     def extract_keywords_with_llm(self, text: str, top_k: int = 10) -> dict:
         """使用 LLM 提取关键词（比 TextRank 更智能），返回 {success, content} 字典"""

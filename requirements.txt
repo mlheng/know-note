@@ -1,5 +1,5 @@
 # requirements.txt - KnowNote 智能笔记助手 核心依赖
-# 用于 Streamlit Cloud 部署（轻量，不含 OCR）
+# 用于 Streamlit Cloud 部署
 
 # Web 框架
 streamlit>=1.30.0
@@ -15,3 +15,7 @@ pandas>=2.0.0
 
 # HTTP 请求（LLM API 调用）
 requests>=2.31.0
+
+# OCR（轻量 Tesseract ~50MB，替代 PaddleOCR 的 500MB）
+pytesseract>=0.3.10
+Pillow>=10.0.0

@@ -168,7 +168,7 @@ class KnowledgeGraphBuilder:
         </head>
         <body>
             <div id="main"></div>
-            <div id="click-hint">💡 点击节点可查询该关键词的 AI 详解</div>
+            <div id="click-hint">💡 点击任意节点 → AI 详解 + 知识联想</div>
             <script>
                 var chartDom = document.getElementById('main');
                 var myChart = echarts.init(chartDom);
@@ -176,7 +176,7 @@ class KnowledgeGraphBuilder:
                 var option = {{
                     title: {{
                         text: '📚 知识图谱',
-                        subtext: '点击节点查询 AI 详解 | 可拖拽/缩放',
+                        subtext: '点击节点 → AI 详解与知识联想 | 可拖拽/缩放',
                         left: 'center',
                         top: 5,
                         subtextStyle: {{ fontSize: 11, color: '#999' }}
@@ -185,7 +185,7 @@ class KnowledgeGraphBuilder:
                         trigger: 'item',
                         formatter: function(params) {{
                             if (params.dataType === 'node') {{
-                                return '<b>' + params.name + '</b><br/><span style="color:#888;">点击查询 AI 详解 →</span>';
+                                return '<b>' + params.name + '</b><br/><span style="color:#888;">🖱️ 点击查询 AI 详解与知识联想 →</span>';
                             }}
                             return params.data.source + ' → ' + params.data.target;
                         }}

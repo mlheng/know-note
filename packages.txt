@@ -1,0 +1,4 @@
+# packages.txt - Streamlit Cloud Linux 系统依赖
+# Tesseract OCR 引擎（轻量 ~50MB，替代 PaddleOCR 的 500MB）
+tesseract-ocr
+tesseract-ocr-chi-sim

@@ -199,10 +199,18 @@ class MindMapBuilder:
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{ background: #f8f9fa; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; }}
         #mindmap {{ width: 100%; height: {height}px; }}
+        #click-hint {{
+            text-align: center;
+            color: #888;
+            font-size: 12px;
+            margin-top: 4px;
+            display: none;
+        }}
     </style>
 </head>
 <body>
     <div id="mindmap"></div>
+    <div id="click-hint">💡 点击任意节点 → AI 详解与知识联想</div>
     <script>
         (function() {{
             var chartDom = document.getElementById('mindmap');
@@ -214,7 +222,11 @@ class MindMapBuilder:
                 tooltip: {{
                     trigger: 'item',
                     formatter: function(params) {{
-                        return '<b>' + params.name + '</b>';
+                        var hasChildren = params.data && params.data.children && params.data.children.length > 0;
+                        var hint = hasChildren
+                            ? '<br/><span style="color:#888;font-size:11px;">🖱️ 点击查询 AI 详解与知识联想</span>'
+                            : '<br/><span style="color:#888;font-size:11px;">🖱️ 点击查询 AI 详解与知识联想 →</span>';
+                        return '<b>' + params.name + '</b>' + hint;
                     }}
                 }},
                 series: [{{
@@ -223,8 +235,8 @@ class MindMapBuilder:
                     layout: 'orthogonal',
                     orient: 'LR',
                     roam: true,
-                    expandAndCollapse: true,
-                    initialTreeDepth: 2,
+                    expandAndCollapse: false,
+                    initialTreeDepth: -1,
                     symbol: 'roundRect',
                     symbolSize: [18, 18],
                     edgeShape: 'curve',
@@ -279,16 +291,49 @@ class MindMapBuilder:
 
             myChart.setOption(option);
 
-            // 点击展开/折叠（ECharts 默认支持，这里增加点击提示）
+            // ========================================
+            // 单击节点 → AI 查询（通过 URL query 传递关键词给 Streamlit）
+            // 注：ECharts tree 的 params.dataType 为 undefined，
+            //     直接用 params.name 判断是否为节点点击
+            // ========================================
             myChart.on('click', function(params) {{
-                // ECharts tree 自带 expandAndCollapse 处理
-                // 此回调可用于未来扩展（如：点击节点查询 AI 详解）
+                if (params.name) {{
+                    var keyword = params.name;
+                    try {{
+                        var currentUrl = window.parent.location.href;
+                        var baseUrl = currentUrl.split('?')[0];
+                        var newUrl = baseUrl + '?keyword=' + encodeURIComponent(keyword);
+                        window.parent.location.href = newUrl;
+                    }} catch(e) {{
+                        // fallback: 修改当前窗口 URL（srcdoc iframe 同源场景不会到这里）
+                        var currentUrl = window.location.href;
+                        var baseUrl = currentUrl.split('?')[0];
+                        var newUrl = baseUrl + '?keyword=' + encodeURIComponent(keyword);
+                        window.location.href = newUrl;
+                    }}
+                }}
+            }});
+
+            // 鼠标悬停时改变光标样式（tree 系列无需 dataType 判断，都是节点）
+            myChart.on('mouseover', function(params) {{
+                if (params.name) {{
+                    chartDom.style.cursor = 'pointer';
+                }}
+            }});
+            myChart.on('mouseout', function(params) {{
+                chartDom.style.cursor = 'default';
             }});
 
             // 自适应大小
             window.addEventListener('resize', function() {{
                 myChart.resize();
             }});
+
+            // 显示操作提示
+            setTimeout(function() {{
+                var hint = document.getElementById('click-hint');
+                if (hint) hint.style.display = 'block';
+            }}, 1500);
         }})();
     </script>
 </body>
