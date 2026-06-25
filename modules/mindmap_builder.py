@@ -322,9 +322,9 @@ class MindMapBuilder:
                         if (hint && hint.style.color === 'rgb(24, 144, 255)') {{
                             hint.textContent = '⚠️ 正在尝试备用跳转方式...';
                             hint.style.color = '#faad14';
-                            var newUrl = window.top.location.href.split('?')[0]
+                            var newUrl = window.parent.location.href.split('?')[0]
                                        + '?keyword=' + encodeURIComponent(keyword);
-                            window.top.location.href = newUrl;
+                            window.parent.location.href = newUrl;
                         }}
                     }}, 1500);
                 }}

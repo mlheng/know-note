@@ -261,16 +261,19 @@ class KnowledgeGraphBuilder:
                             keyword: keyword
                         }}, '*');
 
-                        // 兜底：1.5s 后如果用 postMessage 没有触发 rerun，用传统跳转
-                        setTimeout(function() {{
+                        // 兜底：1.5s 后如果 postMessage 没有触发 rerun，用传统跳转
+                        var fallbackTimer = setTimeout(function() {{
                             if (hint && hint.style.color === 'rgb(24, 144, 255)') {{
                                 hint.textContent = '⚠️ 正在尝试备用跳转方式...';
                                 hint.style.color = '#faad14';
-                                var newUrl = window.top.location.href.split('?')[0]
+                                var newUrl = window.parent.location.href.split('?')[0]
                                            + '?keyword=' + encodeURIComponent(keyword);
-                                window.top.location.href = newUrl;
+                                window.parent.location.href = newUrl;
                             }}
                         }}, 1500);
+
+                        // 如果 postMessage 成功触发 rerun，清除兜底定时器
+                        // （rerun 会导致页面重绘，定时器自然失效）
                     }}
                 }});
 
