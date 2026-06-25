@@ -1,5 +1,6 @@
-# requirements-ocr.txt - OCR 可选依赖（仅本地开发安装）
-# Streamlit Cloud 免费版不支持，请勿部署
+# requirements-ocr.txt - PaddleOCR 可选依赖（仅本地高性能 OCR）
+# Streamlit Cloud 免费版不支持 PaddleOCR（包体积过大），请勿部署
+# 云端部署请使用 requirements.txt 中的 pytesseract + packages.txt
 # 本地安装: pip install -r requirements-ocr.txt
 
 paddlepaddle==2.6.2
